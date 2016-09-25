@@ -14,10 +14,15 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/shape_inference.h"
 
 namespace tensorflow {
 
-REGISTER_OP("LSTMFusedCell")
+using shape_inference::DimensionHandle;
+using shape_inference::InferenceContext;
+using shape_inference::ShapeHandle;
+
+REGISTER_OP("LSTMBlockCell")
     .Input("x: T")
     .Input("cs_prev: T")
     .Input("h_prev: T")
@@ -37,6 +42,19 @@ REGISTER_OP("LSTMFusedCell")
     .Attr("cell_clip: float = 3.0")
     .Attr("use_peephole: bool = false")
     .Attr("T: {float}")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeHandle x, cs_prev;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 2, &x));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 2, &cs_prev));
+
+      DimensionHandle batch_size = c->Dim(x, 0);
+      DimensionHandle cell_size = c->Dim(cs_prev, 1);
+      ShapeHandle output = c->Matrix(batch_size, cell_size);
+      for (int i = 0; i < 7; ++i) {
+        c->set_output(i, output);
+      }
+      return tensorflow::Status::OK();
+    })
     .Doc(R"doc(
 Computes the LSTM cell forward propagation for 1 time step.
 
@@ -74,7 +92,7 @@ co: The cell after the tanh.
 h: The output h vector.
 )doc");
 
-REGISTER_OP("LSTMFusedCellGrad")
+REGISTER_OP("LSTMBlockCellGrad")
     .Input("x: T")
     .Input("cs_prev: T")
     .Input("h_prev: T")
@@ -98,10 +116,28 @@ REGISTER_OP("LSTMFusedCellGrad")
     .Output("wco_grad: T")
     .Attr("use_peephole: bool")
     .Attr("T: {float}")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeHandle x, cs_prev;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 2, &x));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 2, &cs_prev));
+
+      DimensionHandle batch_size = c->Dim(x, 0);
+      DimensionHandle cell_size = c->Dim(cs_prev, 1);
+      DimensionHandle cell_size_times_4;
+      TF_RETURN_IF_ERROR(c->Multiply(cell_size, 4, &cell_size_times_4));
+      ShapeHandle cell_size_vec = c->Vector(cell_size);
+
+      c->set_output(0, c->Matrix(batch_size, cell_size));
+      c->set_output(1, c->Matrix(batch_size, cell_size_times_4));
+      c->set_output(2, cell_size_vec);
+      c->set_output(3, cell_size_vec);
+      c->set_output(4, cell_size_vec);
+      return tensorflow::Status::OK();
+    })
     .Doc(R"doc(
 Computes the LSTM cell backward propagation for 1 timestep.
 
-This implementation is to be used in conjunction of LSTMFusedCell.
+This implementation is to be used in conjunction of LSTMBlockCell.
 
 x: The input to the LSTM cell.
 cs_prev: The previous cell state.
@@ -119,7 +155,7 @@ cs_prev_grad: The gradient of cs.
 dicfo: The derivative wrt to [i, cs, f, o].
 )doc");
 
-REGISTER_OP("FusedLSTM")
+REGISTER_OP("BlockLSTM")
     .Input("seq_len_max: int64")
     .Input("x: max_len * T")
     .Input("cs_prev: T")
@@ -141,10 +177,32 @@ REGISTER_OP("FusedLSTM")
     .Attr("cell_clip: float = 3.0")
     .Attr("use_peephole: bool = false")
     .Attr("T: {float}")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeHandle x, b;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 2, &x));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(c->num_inputs() - 1), 1, &b));
+
+      DimensionHandle batch_size = c->Dim(x, 0);
+      DimensionHandle cell_size;
+      TF_RETURN_IF_ERROR(
+          c->Divide(c->Dim(b, 0), 4, true /* evenly_divisible */, &cell_size));
+
+      int64 max_len;
+      TF_RETURN_IF_ERROR(c->GetAttr("max_len", &max_len));
+
+      DCHECK_EQ(max_len * 7, c->num_outputs());
+      ShapeHandle output = c->Matrix(batch_size, cell_size);
+      for (int i = 0; i < max_len; ++i) {
+        for (int j = 0; j < 7; ++j) {
+          c->set_output(i * 7 + j, output);
+        }
+      }
+      return Status::OK();
+    })
     .Doc(R"doc(
 )doc");
 
-REGISTER_OP("FusedLSTMGrad")
+REGISTER_OP("BlockLSTMGrad")
     .Input("seq_len_max: int64")
     .Input("x: max_len * T")
     .Input("cs_prev: T")
@@ -174,6 +232,32 @@ REGISTER_OP("FusedLSTMGrad")
     .Attr("max_len: int")
     .Attr("use_peephole: bool")
     .Attr("T: {float}")
+    .SetShapeFn([](InferenceContext* c) {
+      int64 max_len;
+      TF_RETURN_IF_ERROR(c->GetAttr("max_len", &max_len));
+
+      ShapeHandle x, cs_prev, h_prev, w, wci, wco, wcf, b;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 2, &x));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1 + max_len), 2, &cs_prev));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(2 + max_len), 2, &h_prev));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(3 + max_len), 2, &w));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(4 + max_len), 1, &wci));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(5 + max_len), 1, &wco));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(6 + max_len), 1, &wcf));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(7 + max_len), 1, &b));
+
+      int out_idx = 0;
+      for (int i = 0; i < max_len; ++i) c->set_output(out_idx++, x);
+      c->set_output(out_idx++, cs_prev);
+      c->set_output(out_idx++, h_prev);
+      c->set_output(out_idx++, w);
+      c->set_output(out_idx++, wci);
+      c->set_output(out_idx++, wco);
+      c->set_output(out_idx++, wcf);
+      c->set_output(out_idx++, b);
+
+      return Status::OK();
+    })
     .Doc(R"doc(
 )doc");
 

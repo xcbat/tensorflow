@@ -28,6 +28,7 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 
 from tensorflow.contrib.learn.python.learn.estimators import _sklearn
+from tensorflow.contrib.learn.python.learn.estimators import estimator
 
 
 _BOSTON_INPUT_DIM = 13
@@ -95,6 +96,7 @@ def logistic_model_no_mode_fn(features, target):
 class CheckCallsMonitor(tf.contrib.learn.monitors.BaseMonitor):
 
   def __init__(self, expect_calls):
+    super(CheckCallsMonitor, self).__init__()
     self.begin_calls = None
     self.end_calls = None
     self.expect_calls = expect_calls
@@ -450,6 +452,72 @@ class InferRealValuedColumnsTest(tf.test.TestCase):
         iris_input_fn)
     self._assert_single_feature_column(
         [_IRIS_INPUT_DIM], tf.float64, feature_columns)
+
+
+class ReplicaDeviceSetterTest(tf.test.TestCase):
+
+  def testVariablesAreOnPs(self):
+    with tf.device(estimator._get_replica_device_setter(
+        tf.contrib.learn.RunConfig(num_ps_replicas=1))):
+      v = tf.Variable([1, 2])
+      w = tf.Variable([2, 1])
+      a = v + w
+    self.assertDeviceEqual('/job:ps/task:0', v.device)
+    self.assertDeviceEqual('/job:ps/task:0', v.initializer.device)
+    self.assertDeviceEqual('/job:ps/task:0', w.device)
+    self.assertDeviceEqual('/job:ps/task:0', w.initializer.device)
+    self.assertDeviceEqual('/job:worker', a.device)
+
+  def testVariablesAreLocal(self):
+    with tf.device(estimator._get_replica_device_setter(
+        tf.contrib.learn.RunConfig(num_ps_replicas=0))):
+      v = tf.Variable([1, 2])
+      w = tf.Variable([2, 1])
+      a = v + w
+    self.assertDeviceEqual('', v.device)
+    self.assertDeviceEqual('', v.initializer.device)
+    self.assertDeviceEqual('', w.device)
+    self.assertDeviceEqual('', w.initializer.device)
+    self.assertDeviceEqual('', a.device)
+
+  def testMutableHashTableIsOnPs(self):
+    with tf.device(estimator._get_replica_device_setter(
+        tf.contrib.learn.RunConfig(num_ps_replicas=1))):
+      default_val = tf.constant([-1, -1], tf.int64)
+      table = tf.contrib.lookup.MutableHashTable(tf.string,
+                                                 tf.int64,
+                                                 default_val)
+      input_string = tf.constant(['brain', 'salad', 'tank'])
+      output = table.lookup(input_string)
+    self.assertDeviceEqual('/job:ps/task:0', table._table_ref.device)
+    self.assertDeviceEqual('/job:ps/task:0', output.device)
+
+  def testMutableHashTableIsLocal(self):
+    with tf.device(estimator._get_replica_device_setter(
+        tf.contrib.learn.RunConfig(num_ps_replicas=0))):
+      default_val = tf.constant([-1, -1], tf.int64)
+      table = tf.contrib.lookup.MutableHashTable(tf.string,
+                                                 tf.int64,
+                                                 default_val)
+      input_string = tf.constant(['brain', 'salad', 'tank'])
+      output = table.lookup(input_string)
+    self.assertDeviceEqual('', table._table_ref.device)
+    self.assertDeviceEqual('', output.device)
+
+  def testTaskIsSetOnWorkerWhenJobNameIsSet(self):
+    with tf.device(
+        estimator._get_replica_device_setter(
+            tf.contrib.learn.RunConfig(
+                num_ps_replicas=1, job_name='worker', task=3))):
+      v = tf.Variable([1, 2])
+      w = tf.Variable([2, 1])
+      a = v + w
+    self.assertDeviceEqual('/job:ps/task:0', v.device)
+    self.assertDeviceEqual('/job:ps/task:0', v.initializer.device)
+    self.assertDeviceEqual('/job:ps/task:0', w.device)
+    self.assertDeviceEqual('/job:ps/task:0', w.initializer.device)
+    self.assertDeviceEqual('/job:worker/task:3', a.device)
+
 
 if __name__ == '__main__':
   tf.test.main()

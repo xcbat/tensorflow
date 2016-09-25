@@ -19,13 +19,16 @@ namespace tensorflow {
 // --------------------------------------------------------------------------
 
 REGISTER_OP("DistributedSdcaLargeBatchSolver")
-    .Attr("loss_type: {'logistic_loss', 'squared_loss', 'hinge_loss'}")
+    .Attr(
+        "loss_type: {'logistic_loss', 'squared_loss', 'hinge_loss',"
+        "'smooth_hinge_loss'}")
+    .Attr("adaptative : bool=false")
     .Attr("num_sparse_features: int >= 0")
     .Attr("num_sparse_features_with_values: int >= 0")
     .Attr("num_dense_features: int >= 0")
     .Attr("l1: float")
     .Attr("l2: float")
-    .Attr("num_partitions: int >= 1")
+    .Attr("num_loss_partitions: int >= 1")
     .Attr("num_inner_iterations: int >= 1")
     .Input("sparse_example_indices: num_sparse_features * int64")
     .Input("sparse_feature_indices: num_sparse_features * int64")
@@ -64,7 +67,7 @@ num_sparse_features_with_values: Number of sparse feature groups with values
 num_dense_features: Number of dense feature groups to train on.
 l1: Symmetric l1 regularization strength.
 l2: Symmetric l2 regularization strength.
-num_partitions: Number of partitions of the loss function.
+num_loss_partitions: Number of partitions of the global loss function.
 num_inner_iterations: Number of iterations per mini-batch.
 sparse_example_indices: a list of vectors which contain example indices.
 sparse_feature_indices: a list of vectors which contain feature indices.
@@ -89,23 +92,18 @@ out_delta_dense_weights: a list of vectors where the values are the delta
 )doc");
 
 REGISTER_OP("SdcaShrinkL1")
-    .Attr("num_sparse_features: int >= 0")
-    .Attr("num_dense_features: int >= 0")
+    .Attr("num_features: int >= 0")
     .Attr("l1: float")
     .Attr("l2: float")
-    .Input("sparse_weights: Ref(num_sparse_features * float)")
-    .Input("dense_weights: Ref(num_dense_features * float)")
+    .Input("weights: Ref(num_features * float)")
     .Doc(R"doc(
 Applies L1 regularization shrink step on the parameters.
 
-num_sparse_features: Number of sparse feature groups to train on.
-num_dense_features: Number of dense feature groups to train on.
+num_features: Number of feature groups to apply shrinking step.
 l1: Symmetric l1 regularization strength.
 l2: Symmetric l2 regularization strength. Should be a positive float.
-sparse_weights: a list of vectors where each value is the weight associated with
-  a sparse feature group.
-dense_weights: a list of vectors where the value is the weight associated with
-  a dense feature group.
+weights: a list of vectors where each value is the weight associated with a
+  feature group.
 )doc");
 
 REGISTER_OP("SdcaFprint")

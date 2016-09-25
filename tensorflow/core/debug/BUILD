@@ -11,8 +11,6 @@ package(
 
 licenses(["notice"])  # Apache 2.0
 
-exports_files(["LICENSE"])
-
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_copts",
@@ -87,6 +85,7 @@ tf_cuda_library(
 tf_cc_test_gpu(
     name = "debug_gateway_test",
     size = "small",
+    srcs = ["debug_gateway_test.cc"],
     args = ["--heap_check=local"],
     linkstatic = tf_kernel_tests_linkstatic(),
     tags = tf_cuda_tests_tags() + ["nomac"],
@@ -116,6 +115,7 @@ tf_cc_test_gpu(
 tf_cc_test(
     name = "debug_io_utils_test",
     size = "small",
+    srcs = ["debug_io_utils_test.cc"],
     linkstatic = tf_kernel_tests_linkstatic(),
     deps = [
         ":debug_io_utils",
